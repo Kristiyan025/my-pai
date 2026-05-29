@@ -1,0 +1,6 @@
+For frontend:
+
+npx create-next-app@latest frontend
+
+
+npm run dev

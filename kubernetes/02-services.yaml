@@ -1,0 +1,239 @@
+# Kubernetes deployments for backend services
+# Apply after 01-infrastructure.yaml
+
+# ============== FileSystem Service ==============
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: filesystem-service
+  namespace: my-pai
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: filesystem-service
+  template:
+    metadata:
+      labels:
+        app: filesystem-service
+    spec:
+      containers:
+        - name: filesystem-service
+          image: my-pai/filesystem-service:latest
+          ports:
+            - containerPort: 8001
+          envFrom:
+            - configMapRef:
+                name: pai-config
+            - secretRef:
+                name: pai-secrets
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "50m"
+            limits:
+              memory: "256Mi"
+              cpu: "200m"
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: filesystem-service
+  namespace: my-pai
+spec:
+  selector:
+    app: filesystem-service
+  ports:
+    - port: 8001
+      targetPort: 8001
+
+---
+# ============== Documents Service ==============
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: documents-service
+  namespace: my-pai
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: documents-service
+  template:
+    metadata:
+      labels:
+        app: documents-service
+    spec:
+      containers:
+        - name: documents-service
+          image: my-pai/documents-service:latest
+          ports:
+            - containerPort: 8002
+          envFrom:
+            - configMapRef:
+                name: pai-config
+            - secretRef:
+                name: pai-secrets
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "50m"
+            limits:
+              memory: "256Mi"
+              cpu: "200m"
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: documents-service
+  namespace: my-pai
+spec:
+  selector:
+    app: documents-service
+  ports:
+    - port: 8002
+      targetPort: 8002
+
+---
+# ============== ChatMessages Service ==============
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: chatmessages-service
+  namespace: my-pai
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: chatmessages-service
+  template:
+    metadata:
+      labels:
+        app: chatmessages-service
+    spec:
+      containers:
+        - name: chatmessages-service
+          image: my-pai/chatmessages-service:latest
+          ports:
+            - containerPort: 8003
+          envFrom:
+            - configMapRef:
+                name: pai-config
+            - secretRef:
+                name: pai-secrets
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "50m"
+            limits:
+              memory: "256Mi"
+              cpu: "200m"
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: chatmessages-service
+  namespace: my-pai
+spec:
+  selector:
+    app: chatmessages-service
+  ports:
+    - port: 8003
+      targetPort: 8003
+
+---
+# ============== APIKeys Service ==============
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: apikeys-service
+  namespace: my-pai
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: apikeys-service
+  template:
+    metadata:
+      labels:
+        app: apikeys-service
+    spec:
+      containers:
+        - name: apikeys-service
+          image: my-pai/apikeys-service:latest
+          ports:
+            - containerPort: 8004
+          envFrom:
+            - configMapRef:
+                name: pai-config
+            - secretRef:
+                name: pai-secrets
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "50m"
+            limits:
+              memory: "256Mi"
+              cpu: "200m"
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: apikeys-service
+  namespace: my-pai
+spec:
+  selector:
+    app: apikeys-service
+  ports:
+    - port: 8004
+      targetPort: 8004
+
+---
+# ============== VectorDB Service ==============
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vectordb-service
+  namespace: my-pai
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: vectordb-service
+  template:
+    metadata:
+      labels:
+        app: vectordb-service
+    spec:
+      containers:
+        - name: vectordb-service
+          image: my-pai/vectordb-service:latest
+          ports:
+            - containerPort: 8005
+          envFrom:
+            - configMapRef:
+                name: pai-config
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vectordb-service
+  namespace: my-pai
+spec:
+  selector:
+    app: vectordb-service
+  ports:
+    - port: 8005
+      targetPort: 8005

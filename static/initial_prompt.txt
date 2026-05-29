@@ -1,0 +1,268 @@
+You are software architect and AI expert with 25 years of experience. Your response should be long & descriptive, with a professional tone. The response should be a Markdown code. Target length of the response should be <=15 pages of Markdown. For diagrams, you should write and give Mermaid code (in MD code blocks), instead of pictures. Include only diagrams that materially help (specified in each requirement type). All Mermaid diagrams must be syntactically valid. Any Python, NextJS code must be syntactically valid.
+
+You need to design the software requirements for a web app, named My PAI. Write FR, NFR, etc. in ‘The system shall…’ style and include acceptance criteria (Given/When/Then or bullet checks) for each major requirement. The requirements should include:
+- Domain Description (DD) - description of the domain knowledge of the system, like: entities, relationships, collection relative sizes. Also, a glossary of the domain-specific terms should be included;
+- Functional Requirements (FR)
+- Non-Functional Requirements (NFR) - including business requirements and quality attributes, i.e. all important drivers;
+- Tech Stack Requirements (TSR)
+- Database view (DBV) - including description of all tables and their columns, indices, constraints, i.e. everything needed to implement the DB schema from the requirements; it'll be good to include diagrams; DBV must include: table name, purpose, columns (type, nullability), PK/FK, unique constraints, check constraints where applicable, and indices with rationale. Use MySQL 8 only.
+- Use-Case Diagrams (UCD) - explaining how the system can be used by all types of actors;
+- API Requirements (APIR) - explaining all API endpoints (including public & internal);
+- K8 Requirements (K8R) - explaining service architecture and which services can communicate with one another, and how much resources (RAM, gpu) can the components use.
+- Classes/Components View (CLV) - description of the classes' relationships;
+- Project Structure View (PSV) - description of how the files/directories should be organised. It should be strongly correlated to the Classes/Components View. It'll be good to include diagrams;
+
+
+The project will be run on windows laptop with 1 GPU NVIDIA GeForce 3070 RTX 8gb, but I have WSL2.
+Internal service communication should be over REST, and also all calls to another service should be synchronuous as otherwise there is a chance of running 2 ML models at the same time, which can cause problems, as the models are big and the gpu is small.
+
+Here is the description of the project and what kind of functionality it should support:
+ - The system is a server-rendered web app called "My PAI".
+ - The system is essentially a ChatGPT clone with enhanced file handling.
+ - In the system should have only one user (hardcoded in all DBs as user id = 1) which is automatically logged in and never logs out.
+ - The system presents a Kubernettes (K8) cluster. All DBs services should be persistent, make sure that is specified in the requirements, as I am not absolutely sure how this works in K8.
+ - The system is essentially a sophisticated chatbot with access to a workspace (file system).
+ - The system uses NextJS for the front end, and Python/FastAPI for the backend.
+ - The system should be able to do simple tasks as describing images, converting between file formats, searching in the internet, writing emails, etc.
+
+
+The system should have the following agents:
+- Web Search Agent (WSA) - the agent will perform web queries to popular search
+engines (as described in https://www.semrush.com/blog/python-for-google-search/).
+- Music Player Agent (MPA) – the agent will play music from Spotify. This would entail
+managing playback requests, playlists, authentication with Spotify, play/pause/seek and
+providing confirmation.
+1. Workspace Agent (WSA) – this agent is the system’s reverse proxy to the per user "file system". Workspace = file system.
+- The agent uses services, which should be available only to it. They should be separate K8 pods, and the agent can make requests/queries to them. The agent's services are:
+	- DocumentsService:
+		- a persistent document store MinIO
+		- stores the documents/files, with stable ids (UUID).
+ 	- FileSystemService:
+		- PostgreSQL
+		- table for filepaths: (user id, workspace filepath, UUID, file type, created_at, updated_at). Should have a primary index on (user id, workspace filepath).
+		- table for subdirectories: (user id, directory, subdirectory, created_at, updated_at). Should have a primary index on (user id, directory).
+- the agent exposes the following functionalities:
+	- read a file, i.e. given a user id and filepath, return the file's content. (entails accessing a record in the FileSystemService, and accessing a document in the DocumentsService)
+	- copy a file to another directory. Can copy multiple files to a directory. Can copy a whole directory's contents to another directory. (entails copying documents in the DocumentsService, and creating new records in the FileSystemService). The operation may be recursive, if a whole directory must be copied.
+	- move a file to another directory. Can move multiple files to a directory. Can move a whole directory's contents to another directory. (entails changing filepaths in the FileSystemService).
+	- delete a file, multiple files or an entire directory. (entails deleting documents in the DocumentsService, and deleting records in the FileSystemService). The operation may be recursive, if a whole directory must be copied.
+	- update a file, with a new version. (entails creating a new document and deleting an old one in the DocumentsService and updating the uuid in the FileSystemService)
+	- rename a file/directory (entails updating records in the FileSystemService)
+	- list files in a directory for a user id.
+	- list subdirectories in a directory for a user id.
+	* modifications of a file in any form should trigger the file's embedding modifications in the SDSA.
+
+2. Chat Store Agent (CSA) - this agent stores and returns the chat messages.
+- The agent uses services, which should be available only to it. They should be separate K8 pods, and the agent can make requests/queries to them. The agent's services are:
+	- ChatMessagesService:
+		- PostgreSQL
+		- table for chats: (user id, chat id, chat name). Should have a primary index (user id, chat id) and non-clustered index on  (user id).
+		- table for chat messages: (chat id, created_at, message id, message text, user role). Should have a primary index on (chat id, created_at).
+			- "message text" should be text where a substring of the form  <file path="/path/to/file"/> indicates reference to file.
+			- "user role" can have the following values: "user", "system".
+- the agent exposes the following functionalities:
+	- retrieve chat id (& chat names) for a given user.
+	- retrieve the last N chat messages in a specific chat id of a specific user id.
+	- create an empty chat for a given user id
+	- delete a specific chat for a given user id
+	- add message in a specific chat at the current time (in UTC).
+* messages are immutable, i.e. once created, they cannot be changed.
+
+3. Semantic Document Store Agent (SDSA) - this agent handles the embedding of documents
+- The agent uses several utility classes, which should be in the same pod as the agent. Some of the classes will load/call a ML model; ensure each model are loaded only when the agent is requested, i.e. don't keep them loaded at all times, as they'll share 1 GPU's memory and it won't be able to hold them all at once. Also, when inserting each chunk in the VectorDB, there is document field, which should be the the chunk's content; if the chunk is an image chunk, this field should contain the "user::filepath". They utility classes are:
+	- TextEmbedder:
+		- given a text produces a text vector embedding (as described in backend/examples/multi_modal_embedding_example/example_embedding.py)
+	- ImageEmbedder:
+		- given an image, computes the vision vector embedding (as described in backend/examples/multi_modal_embedding_example/example_embedding.py)
+	- ImageTextExtractor:
+		- extracts the text with (Google Tesseract OCR) if there is any on the image.
+	- ImageCaptioner:
+		- gives a textual description of an image using an ollama model (e.g. "llava-hf/llava-1.5-7b").
+	- TextSummarizer:
+		- given a text, summarize it into a shorter text (as described in summarize_chunk_ollama in backend/examples/homework_example/index_documents.py; but maybe use a bigger model than the one used there).
+	- TextChunker:
+		- given a document's text content (and possibly document metadata), return a generator of document chuncks (with metadata). TextChunker can be used on .txt files, code files, config files, etc.
+	- NotebookChunker:
+		- given a .ipynb file's content (and possibly document metadata), return a generator of document chunks (with metadata). To chunk the notebook, start by extracting the cells (similar to backend/examples/homework_example/index_documents.py), but extract cell's code/text + cell's output. Now, since the output can contain both images and text, extract as a text chunk the cell's input & text output, and as image chunk(s) the images in the cell's output; cell's image chunks follow the cell's text chunks. Now, from that stream of chunks, try to semantically combine neighbouring text chunks, with size limits of course. To each chunk a metadata is added from which file/cell it comes, also whether is text/image and data type. 
+	- WordDocumentChunker:
+		- given a .doc/.docx file's content (and possibly document metadata), return a generator of document chunks (with metadata). Semantic chunking is performed that produces a stream of text/image chunks (as for the notebook chunking). As usual, metadata is added to each chunk.
+	- PresentationChunker:
+		- given a .pptx file's content (and possibly document metadata), return a generator of document chunks (with metadata). Semantic chunking is performed that produces a stream of text/image chunks (as for the notebook chunking). As usual, metadata is added to each chunk.
+	- MarkdownChunker:
+		- given a .md/.mdx file's content (and possibly document metadata), return a generator of document chunks (with metadata). A more sophisticated semantic chunking is performed as the data has precise structure.
+	- DocumentChunker:
+		- given a file's content and metadata, based on the file type, run the corresponding chunker.
+	- TextChunkEmbedder:
+		- just use the TextEmbedder to embed the text and return embedding with metadata, which should include a summary of the chunk via the TextSummarizer.
+	- ImageChunkEmbedder:
+		- given an image chunk (with metadata), produce 2 embeddings with metadata:
+			- a vision embedding (done with the ImageEmbedder) with metadata, including the extracted text from the image via the ImageTextExtractor, and the image's text description via ImageCaptioner
+			- a text embedding of the extracted text from the image (done with ImageTextExtractor), which is embedded with the TextEmbedder), with metadata including the image's text description via the ImageCaptioner
+		- optimize the generation of the image's caption to happen only once, not twice.
+	- ChunkEmbedder:
+		- given a chunk, based on whether its type is text/image, call the corresponding chunk embedder.
+- The agent uses services, which should be available only to it. They should be separate K8 pods, and the agent can make requests/queries to them. The agent's services are:
+	- VectorDBService:
+		- a persistent ChromaDB on a disk.
+- Agent's API: 
+	- receives a document, its name & type and adds it to the embedding store, by first chunking it via the DocumentChunker, and the resulting stream of chunks is passed to the ChunkEmbedder and the resulting stream is flattened (as the ImageChunkEmbedder produces multiple embeddings for 1 chunk), and then persisted in the VectorDBService; old records with the same id (which is generated based on (part of) the chunk metadata are removed first, and then the new records are added. 
+	- receives a user id, chat id, message id, fetches the message and the previous 3 messages from the CSA in the same chat, and adds it to the embedding store, by first chunking it via the DocumentChunker, and the resulting stream of chunks is passed to the ChunkEmbedder and the resulting stream is flattened (as the ImageChunkEmbedder produces multiple embeddings for 1 chunk), and then persisted in the VectorDBService; old records with the same id (which is generated based on (part of) the chunk metadata are removed first, and then the new records are added.
+	- given an embedding, return the top K most relevant document chunks and return their content, not embedding (see backend/examples/homework_example/index_documents.py's main() for how to save chunk's content with the embedding and see backend/examples/homework_example/chatbot.py for document's content retrieval from the results).
+
+4. Web Search Agent (WSA) - the agent will perform web queries to popular search
+- Goal
+	- The agent receives a user query string and returns a JSON array of pairs: [ [url, content], ... ].
+	- The agent must (1) search to obtain a ranked list of URLs, then (2) fetch each URL and extract content.
+
+- Inputs
+	- query: string (required)
+	- max_results: integer (optional, default 5, range 1–20)
+	- language: string (optional, IETF tag like "en", "bg")
+	- region: string (optional, e.g. "US", "BG")
+	- allow_domains / block_domains: lists (optional)
+	- timeout_ms: integer (optional)
+
+- Outputs (STRICT)
+	- Output must be valid JSON (no markdown, no extra keys, no commentary).
+	- Output must be a JSON array of length <= max_results.
+	- Each element must be a 2-item array: [ "<url>", "<content>" ].
+	- URL must be absolute and normalized.
+	- Content must be UTF-8 text.
+
+- Core Functional Requirements
+	1) Search Phase
+   		- Use a web search provider/API to retrieve a ranked list of candidate URLs for the query.
+   		- De-duplicate URLs (canonicalize; remove tracking params where safe).
+   		- Respect allow_domains/block_domains if provided.
+   		- Prefer authoritative sources; avoid spam and low-quality pages.
+   		- Provide URLs in the same order they will be fetched (highest relevance first).
+
+	2) Fetch Phase
+   		- For each URL, fetch the resource over HTTP(S).
+   		- Follow redirects up to a safe limit (e.g., 5).
+   		- Enforce per-request timeout and overall timeout.
+   		- Handle HTTP errors gracefully (skip or return empty content per policy; define policy).
+
+	3) Content Handling
+   		- Detect content type using HTTP headers + sniffing fallback.
+   		- If content is HTML:
+       			- Extract the main readable text only (article/body content).
+       			- Remove navigation, sidebars, headers/footers, ads, cookie banners, scripts, styles, and other layout/boilerplate.
+       			- Preserve meaningful structure as plain text:
+           			- Paragraph breaks
+           			- Headings as lines
+           			- Lists as bullet lines
+           			- Tables as reasonable text (row-per-line) if feasible
+       			- Strip all remaining HTML tags and entities.
+   		- If content is non-HTML (e.g., PDF, JSON, TXT, XML, CSV, images, binaries):
+       			- Return the content unmodified (as text). If binary, specify an exact policy:
+           			- Either return base64-encoded bytes as a string, OR
+           			- Skip and return empty string with the URL still included (choose one and justify).
+       			- Do not attempt summarization or transformation.
+
+	4) Ordering and Completeness
+   		- Fetch URLs sequentially or concurrently (define concurrency limit).
+   		- Return results in the same order as the selected URLs.
+   		- Ensure each returned pair corresponds to exactly one fetched URL.
+
+- Non-Functional Requirements
+	- Performance: support concurrent fetches; typical latency target (e.g., <10s for 5 URLs on average network).
+	- Reliability: retries with backoff for transient failures; circuit breaking for repeated failures.
+	- Security: SSRF protection, block local नेटवर्क ranges, limit redirects, user-agent identification, robots.txt policy (define).
+	- Privacy: do not leak user secrets in URLs; strip sensitive query params if needed.
+	- Compliance: respect site terms and rate limits; include attribution metadata if required (but DO NOT include it in output JSON).
+	- Observability: log query, chosen URLs, status codes, content types, extraction success, timing, errors (without PII).
+
+- Edge Cases to Cover
+	- Duplicate URLs, shortened URLs, redirect loops
+	- Paywalled pages / consent walls
+	- Very large pages (set max bytes)
+	- Non-UTF8 encodings (must decode)
+	- Mixed content types, incorrect headers
+	- Empty/main-text extraction failure (fallback to body text, then to stripped HTML)
+
+- Acceptance Criteria (make these explicit and testable)
+	- Given a query, the agent returns a valid JSON array of [url, content] pairs only.
+	- For HTML pages, content contains only main readable text with boilerplate removed.
+	- For non-HTML resources, content equals the fetched content bytes/text per the chosen “unmodified” policy.
+	- Results are ordered and limited by max_results.
+	- Agent handles failures without crashing and follows the defined error policy.
+
+- Deliverables
+	- Requirements spec (functional + non-functional)
+	- API contract (input/output schema)
+	- Error handling policy
+	- Test plan with at least 10 test cases (HTML article, blog with heavy nav, PDF, JSON, 404, redirect, consent wall, huge file, non-UTF8 page, duplicate links)
+
+- Now produce:
+	1) A concise requirements document with numbered requirements.
+	2) A JSON schema for the output.
+	3) A short test plan (bulleted).
+
+5. Spotify Music Agent (SMA) - this agent fetches a song's a from Spotify.
+- The agent uses services, which should be available only to it. They should be separate K8 pods, and the agent can make requests/queries to them. The agent's services are:
+	- APIKeyService:
+		- PostgreSQL
+		- APY keys table: (user id, Spotify API key). The primary index is on User id. The APY key column can be null.
+	
+	- Agent's API:
+		- given user id and a song name, return the audio of the song from Spotify.
+			- use spotipy python package.
+			- first check whether the user has API key; if not, return error response.	
+			- return as response the audio content of the song (see how this can be achieved with the spotipy interface and how to send it as response over REST)
+		- set the API key for a specific user id.
+
+6. Voice I/O Agent (Speech Agent) (VIOA) -  converts text <-> speech.
+	- given a audio recording, transcribe it and return the text. (uses an ML model from Ollama/HuggingFace)
+	- given a text message, generate an audio reading of it using a default voice. (uses an ML model from Ollama/HuggingFace)
+	- given a user id, chat id, message id, fetch the message's content from the CSA and then call the 
+previous recording to make an audio content from the text and return that.
+
+7. File Transform Agent (FTA)
+– the agent will perform file conversions. It can convert file between the following formats:
+	- [png, jpeg, jpg, webp, bmp, gif] -> [png, jpeg, jpg, webp, bmp, gif]
+	- [pptx, doc, docx, png(s), jpeg(s), jpg(s), webp(s), bmp(s), gif(s)] -> pdf
+	- [pptx, doc, docx] -> [png(s), jpeg(s), jpg(s)]
+	- pdf -> [png(s), jpeg(s), jpg(s)]
+	* each possible file conversion should be implemented separately.  
+- the agent can also can perform more then file conversions, like:
+	- merge n PDFs into a single one
+	- rotate certain page(s) clockwise/anticlockwise
+	- switch 2 pages of a pdf, given numbers of the pages
+* to implement the functionality, it should use local tools like but not limiting to ImageMagick, PyPDF2.
+
+8. General Task Agent (GTA) - this agent performs tasks that are too general and cannot be performed by any other agent, like counting number of elements in a collection, etc.
+	- it receives as input, arguments (json/binary content) and python code, and executes the code on the elements. 
+9. Conversational Agent (CA) - this agent accepts a text input and possibly some description of the persona, and generates text output via an LLM (via Ollama/HuggingFace).
+
+10. Task Planner Agent (TPA) - it creates an execution plan for generating a response for a given query.
+- The single task of the agent consists of:
+ 	- given a message id, chat id, user id, fetch the message's content from the CSA.
+	- Use an LLM (via Ollama/HuggingFace) to generate an execution plan from the message's  content (i.e. the prompt).
+		- The execution plan is a structured JSON as list of instructions. Kind of describes very minimalistic programming language. You have freedom to determine the language's syntax, but there are several important features the language need to be able to allow:
+			- All commands are about calling any of the functionality of the previous agents.
+			- You can make variables, in which you can store the result of the commands, and pass its value as argument for other commands.
+		- The structure of the plan should be ENFORCED and the LLM shouldn't return invalid syntax. I.e. the initial prompt for the LLM should be generated that explain the language syntax and gives the the permissions and restrictions.
+		- The first steps of the plan should be to verify that the task is not contradictory, e.g. trying to modify a non-existing file, or the file of the wrong type for the operations it is intended to undergo later.
+	- return the created plan.
+
+11. Orchestrator Agent (OA) - this agent will "run" the execution of the query until the response is generated.
+	- It receives the message content (i.e. the prompt), chat id, user id. Then:
+		- add message to the corresponding chat via the CSA and receive the message id.
+		- send the message id, chat id, user id to the TPA and receive the execution plan.
+		- then iterate the steps of the plan and execute each one, by calling the corresponding agent.
+		- at the end, save the result as the next message, from the System.
+		- send it as response.
+
+12. UI Agent - serves the NextJS frontend
+- the system has essentially 2 pages:
+	- the chat page - here, you can follow the ChatGPT's main page design very closely, excluding any user/related functionality, except of displaying the name, and also no project functionality. In the side bar, all the chats can be viewed, a new empty chat can be created, and there is a button to the workspace page. In the main chat history section, the conversation is displayed, and each message's contend can be copied (only the text part if there are files), and it can be heard (using the VIOA). Inside the prompt text field, the user should be able to reference files from the workspace which should visually be displayed like blocks, not just plain text; during typing of the filepath, you can use the FSA to display options of what can follow next. Also, there can be options to upload files. These files will automatically get saved in /file_uploads in the workspace; an error should be displayed if the file already exists there; furthermore, after the upload, a little view of the file (i.e. icon and name) should be displayed in the text area, similar to ChatGPT's frontend. And of course, there should be a button for sending the prompt.
+	- the workspace page - basically a file system web viewer page. You see the pwd, display in the menu above, and on the main section you see the subdirectories and the files in the pwd. Also, in the menu there is buttons for uploading a new file/folder there. All the files should be displayed with a big icon with the format's written on it (you can use existing icons for that), and under it, the file's name. The subdirectories should be displayed with a folder icon and the subdirectory's name under it.
+The user can select multiple files, copy, cut, delete, etc as in normal file system. When a user clicks on a subdirectory widget, the view should be redisplayed for the subdirectory. In the menu, there should also be a button for returning one directory upwards. Also, in the menu there should be a button for going back to the chats view. When a user clicks on a file, a new page should be loaded where the file can be viewed. This file view depends on the file's type. The system should allow uploading/viewing the following kinds of files: png, jpeg, jpg, webp, bmp, gif, pptx, doc, docx, pdf, code files, like .py, .cpp, .h, .hpp, .java, .ipynb, .r, .js, .html, .css, .ts, etc.
+
+
+
+
+
+
+

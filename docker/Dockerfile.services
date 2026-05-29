@@ -1,0 +1,53 @@
+# Python Backend Base Image
+FROM python:3.11-slim AS base
+
+WORKDIR /app
+
+# Install minimal system dependencies for services
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc \
+    g++ \
+    libffi-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Python dependencies (minimal for services)
+COPY backend/requirements-services.txt .
+RUN pip install --no-cache-dir -r requirements-services.txt
+
+# Copy shared code
+COPY backend/shared /app/shared
+
+# ============== Filesystem Service ==============
+FROM base AS filesystem-service
+COPY backend/services/filesystem_service /app/services/filesystem_service
+WORKDIR /app/services/filesystem_service
+EXPOSE 8001
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8001"]
+
+# ============== Documents Service ==============
+FROM base AS documents-service
+COPY backend/services/documents_service /app/services/documents_service
+WORKDIR /app/services/documents_service
+EXPOSE 8002
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8002"]
+
+# ============== ChatMessages Service ==============
+FROM base AS chatmessages-service
+COPY backend/services/chatmessages_service /app/services/chatmessages_service
+WORKDIR /app/services/chatmessages_service
+EXPOSE 8003
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8003"]
+
+# ============== APIKeys Service ==============
+FROM base AS apikeys-service
+COPY backend/services/apikeys_service /app/services/apikeys_service
+WORKDIR /app/services/apikeys_service
+EXPOSE 8004
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8004"]
+
+# ============== VectorDB Service ==============
+FROM base AS vectordb-service
+COPY backend/services/vectordb_service /app/services/vectordb_service
+WORKDIR /app/services/vectordb_service
+EXPOSE 8005
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8005"]

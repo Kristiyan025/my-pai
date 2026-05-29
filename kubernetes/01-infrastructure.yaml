@@ -1,0 +1,371 @@
+# Kubernetes deployment configurations for My PAI
+# Apply with: kubectl apply -f kubernetes/
+
+# ============== Namespace ==============
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: my-pai
+
+---
+# ============== ConfigMap ==============
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pai-config
+  namespace: my-pai
+data:
+  MYSQL_HOST: "mysql-service"
+  MYSQL_PORT: "3306"
+  MYSQL_DATABASE: "mypai"
+  MINIO_ENDPOINT: "minio-service:9000"
+  MINIO_BUCKET: "documents"
+  CHROMADB_HOST: "chromadb-service"
+  CHROMADB_PORT: "8000"
+  OLLAMA_URL: "http://ollama-service:11434"
+
+  # Service URLs
+  FILESYSTEM_SERVICE_URL: "http://filesystem-service:8001"
+  DOCUMENTS_SERVICE_URL: "http://documents-service:8002"
+  CHATMESSAGES_SERVICE_URL: "http://chatmessages-service:8003"
+  APIKEYS_SERVICE_URL: "http://apikeys-service:8004"
+  VECTORDB_SERVICE_URL: "http://vectordb-service:8005"
+
+  # Agent URLs
+  WORKSPACE_AGENT_URL: "http://workspace-agent:8010"
+  CHATSTORE_AGENT_URL: "http://chatstore-agent:8011"
+  SDSA_AGENT_URL: "http://sdsa-agent:8012"
+  WEBSEARCH_AGENT_URL: "http://websearch-agent:8013"
+  SPOTIFY_AGENT_URL: "http://spotify-agent:8014"
+  VOICEIO_AGENT_URL: "http://voiceio-agent:8015"
+  FILETRANSFORM_AGENT_URL: "http://filetransform-agent:8016"
+  GENERALTASK_AGENT_URL: "http://generaltask-agent:8017"
+  CONVERSATIONAL_AGENT_URL: "http://conversational-agent:8018"
+  TASKPLANNER_AGENT_URL: "http://taskplanner-agent:8019"
+  ORCHESTRATOR_URL: "http://orchestrator-agent:8020"
+
+---
+# ============== Secrets ==============
+apiVersion: v1
+kind: Secret
+metadata:
+  name: pai-secrets
+  namespace: my-pai
+type: Opaque
+stringData:
+  MYSQL_USER: "mypai"
+  MYSQL_PASSWORD: "mypai_password"
+  MYSQL_ROOT_PASSWORD: "root_password"
+  MINIO_ACCESS_KEY: "minio_access_key"
+  MINIO_SECRET_KEY: "minio_secret_key"
+
+---
+# ============== PersistentVolumeClaims ==============
+
+# MySQL data
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mysql-pvc
+  namespace: my-pai
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+
+---
+# MinIO data
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: minio-pvc
+  namespace: my-pai
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 50Gi
+
+---
+# ChromaDB data
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: chromadb-pvc
+  namespace: my-pai
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 20Gi
+
+---
+# Ollama models
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ollama-pvc
+  namespace: my-pai
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 50Gi
+
+---
+# ============== MySQL ==============
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mysql
+  namespace: my-pai
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mysql
+  template:
+    metadata:
+      labels:
+        app: mysql
+    spec:
+      containers:
+        - name: mysql
+          image: mysql:8.0
+          ports:
+            - containerPort: 3306
+          env:
+            - name: MYSQL_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: pai-secrets
+                  key: MYSQL_ROOT_PASSWORD
+            - name: MYSQL_DATABASE
+              valueFrom:
+                configMapKeyRef:
+                  name: pai-config
+                  key: MYSQL_DATABASE
+            - name: MYSQL_USER
+              valueFrom:
+                secretKeyRef:
+                  name: pai-secrets
+                  key: MYSQL_USER
+            - name: MYSQL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: pai-secrets
+                  key: MYSQL_PASSWORD
+          volumeMounts:
+            - name: mysql-data
+              mountPath: /var/lib/mysql
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "250m"
+            limits:
+              memory: "1Gi"
+              cpu: "500m"
+      volumes:
+        - name: mysql-data
+          persistentVolumeClaim:
+            claimName: mysql-pvc
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mysql-service
+  namespace: my-pai
+spec:
+  selector:
+    app: mysql
+  ports:
+    - port: 3306
+      targetPort: 3306
+
+---
+# ============== MinIO ==============
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: minio
+  namespace: my-pai
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: minio
+  template:
+    metadata:
+      labels:
+        app: minio
+    spec:
+      containers:
+        - name: minio
+          image: minio/minio:latest
+          args:
+            - server
+            - /data
+            - --console-address
+            - ":9001"
+          ports:
+            - containerPort: 9000
+            - containerPort: 9001
+          env:
+            - name: MINIO_ROOT_USER
+              valueFrom:
+                secretKeyRef:
+                  name: pai-secrets
+                  key: MINIO_ACCESS_KEY
+            - name: MINIO_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: pai-secrets
+                  key: MINIO_SECRET_KEY
+          volumeMounts:
+            - name: minio-data
+              mountPath: /data
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "250m"
+      volumes:
+        - name: minio-data
+          persistentVolumeClaim:
+            claimName: minio-pvc
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: minio-service
+  namespace: my-pai
+spec:
+  selector:
+    app: minio
+  ports:
+    - name: api
+      port: 9000
+      targetPort: 9000
+    - name: console
+      port: 9001
+      targetPort: 9001
+
+---
+# ============== ChromaDB ==============
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: chromadb
+  namespace: my-pai
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: chromadb
+  template:
+    metadata:
+      labels:
+        app: chromadb
+    spec:
+      containers:
+        - name: chromadb
+          image: chromadb/chroma:latest
+          ports:
+            - containerPort: 8000
+          env:
+            - name: IS_PERSISTENT
+              value: "TRUE"
+            - name: PERSIST_DIRECTORY
+              value: "/chroma/chroma"
+          volumeMounts:
+            - name: chromadb-data
+              mountPath: /chroma/chroma
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "250m"
+            limits:
+              memory: "2Gi"
+              cpu: "1"
+      volumes:
+        - name: chromadb-data
+          persistentVolumeClaim:
+            claimName: chromadb-pvc
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: chromadb-service
+  namespace: my-pai
+spec:
+  selector:
+    app: chromadb
+  ports:
+    - port: 8000
+      targetPort: 8000
+
+---
+# ============== Ollama (GPU) ==============
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ollama
+  namespace: my-pai
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ollama
+  template:
+    metadata:
+      labels:
+        app: ollama
+    spec:
+      containers:
+        - name: ollama
+          image: ollama/ollama:latest
+          ports:
+            - containerPort: 11434
+          volumeMounts:
+            - name: ollama-data
+              mountPath: /root/.ollama
+          resources:
+            limits:
+              nvidia.com/gpu: 1
+              memory: "12Gi"
+              cpu: "4"
+            requests:
+              nvidia.com/gpu: 1
+              memory: "8Gi"
+              cpu: "2"
+      volumes:
+        - name: ollama-data
+          persistentVolumeClaim:
+            claimName: ollama-pvc
+      tolerations:
+        - key: "nvidia.com/gpu"
+          operator: "Exists"
+          effect: "NoSchedule"
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ollama-service
+  namespace: my-pai
+spec:
+  selector:
+    app: ollama
+  ports:
+    - port: 11434
+      targetPort: 11434

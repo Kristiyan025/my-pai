@@ -1,0 +1,355 @@
+# My PAI - Docker Compose for Local Development
+# This file runs all services and agents for local development
+
+services:
+  # ============== Infrastructure ==============
+  mysql:
+    image: mysql:8.0
+    container_name: pai-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpassword
+      MYSQL_DATABASE: pai_db
+      MYSQL_USER: pai_user
+      MYSQL_PASSWORD: pai_password
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  minio:
+    image: minio/minio:latest
+    container_name: pai-minio
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  chromadb:
+    image: chromadb/chroma:latest
+    container_name: pai-chromadb
+    ports:
+      - "8000:8000"
+    volumes:
+      - chromadb_data:/chroma/chroma
+    environment:
+      IS_PERSISTENT: "TRUE"
+      ANONYMIZED_TELEMETRY: "FALSE"
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: pai-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  # ============== Backend Services ==============
+  filesystem-service:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.services
+      target: filesystem-service
+    container_name: pai-filesystem-service
+    ports:
+      - "8001:8001"
+    environment:
+      - MYSQL_HOST=mysql
+      - MYSQL_PORT=3306
+      - MYSQL_USER=pai_user
+      - MYSQL_PASSWORD=pai_password
+      - MYSQL_DATABASE=pai_db
+    depends_on:
+      mysql:
+        condition: service_healthy
+
+  documents-service:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.services
+      target: documents-service
+    container_name: pai-documents-service
+    ports:
+      - "8002:8002"
+    environment:
+      - MINIO_HOST=minio
+      - MINIO_PORT=9000
+      - MINIO_ACCESS_KEY=minioadmin
+      - MINIO_SECRET_KEY=minioadmin
+    depends_on:
+      - minio
+
+  chatmessages-service:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.services
+      target: chatmessages-service
+    container_name: pai-chatmessages-service
+    ports:
+      - "8003:8003"
+    environment:
+      - MYSQL_HOST=mysql
+      - MYSQL_PORT=3306
+      - MYSQL_USER=pai_user
+      - MYSQL_PASSWORD=pai_password
+      - MYSQL_DATABASE=pai_db
+    depends_on:
+      mysql:
+        condition: service_healthy
+
+  apikeys-service:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.services
+      target: apikeys-service
+    container_name: pai-apikeys-service
+    ports:
+      - "8004:8004"
+    environment:
+      - MYSQL_HOST=mysql
+      - MYSQL_PORT=3306
+      - MYSQL_USER=pai_user
+      - MYSQL_PASSWORD=pai_password
+      - MYSQL_DATABASE=pai_db
+    depends_on:
+      mysql:
+        condition: service_healthy
+
+  vectordb-service:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.services
+      target: vectordb-service
+    container_name: pai-vectordb-service
+    ports:
+      - "8005:8005"
+    environment:
+      - CHROMADB_HOST=chromadb
+      - CHROMADB_PORT=8000
+    depends_on:
+      - chromadb
+
+  # ============== Backend Agents ==============
+  workspace-agent:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.agents
+      target: workspace-agent
+    container_name: pai-workspace-agent
+    ports:
+      - "8010:8010"
+    environment:
+      - FILESYSTEM_SERVICE_URL=http://filesystem-service:8001
+      - DOCUMENTS_SERVICE_URL=http://documents-service:8002
+      - SDSA_AGENT_URL=http://sdsa-agent:8012
+    depends_on:
+      - filesystem-service
+      - documents-service
+
+  chatstore-agent:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.agents
+      target: chatstore-agent
+    container_name: pai-chatstore-agent
+    ports:
+      - "8011:8011"
+    environment:
+      - CHATMESSAGES_SERVICE_URL=http://chatmessages-service:8003
+      - SDSA_AGENT_URL=http://sdsa-agent:8012
+    depends_on:
+      - chatmessages-service
+
+  sdsa-agent:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.agents
+      target: sdsa-agent
+    container_name: pai-sdsa-agent
+    ports:
+      - "8012:8012"
+    environment:
+      - VECTORDB_SERVICE_URL=http://vectordb-service:8005
+      - DOCUMENTS_SERVICE_URL=http://documents-service:8002
+      - OLLAMA_URL=http://ollama:11434
+    volumes:
+      - model_cache:/root/.cache
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    depends_on:
+      - vectordb-service
+      - documents-service
+      - ollama
+
+  websearch-agent:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.agents
+      target: websearch-agent
+    container_name: pai-websearch-agent
+    ports:
+      - "8013:8013"
+
+  spotify-agent:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.agents
+      target: spotify-agent
+    container_name: pai-spotify-agent
+    ports:
+      - "8014:8014"
+    environment:
+      - APIKEYS_SERVICE_URL=http://apikeys-service:8004
+    depends_on:
+      - apikeys-service
+
+  voiceio-agent:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.agents
+      target: voiceio-agent
+    container_name: pai-voiceio-agent
+    ports:
+      - "8015:8015"
+    volumes:
+      - model_cache:/root/.cache
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  filetransform-agent:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.agents
+      target: filetransform-agent
+    container_name: pai-filetransform-agent
+    ports:
+      - "8016:8016"
+    environment:
+      - WORKSPACE_AGENT_URL=http://workspace-agent:8010
+    depends_on:
+      - workspace-agent
+
+  generaltask-agent:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.agents
+      target: generaltask-agent
+    container_name: pai-generaltask-agent
+    ports:
+      - "8017:8017"
+
+  conversational-agent:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.agents
+      target: conversational-agent
+    container_name: pai-conversational-agent
+    ports:
+      - "8018:8018"
+    environment:
+      - OLLAMA_URL=http://ollama:11434
+      - SDSA_AGENT_URL=http://sdsa-agent:8012
+      - CHATSTORE_AGENT_URL=http://chatstore-agent:8011
+    depends_on:
+      - ollama
+      - sdsa-agent
+      - chatstore-agent
+
+  taskplanner-agent:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.agents
+      target: taskplanner-agent
+    container_name: pai-taskplanner-agent
+    ports:
+      - "8019:8019"
+    environment:
+      - OLLAMA_URL=http://ollama:11434
+    depends_on:
+      - ollama
+
+  orchestrator-agent:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.agents
+      target: orchestrator-agent
+    container_name: pai-orchestrator-agent
+    ports:
+      - "8020:8020"
+    environment:
+      - TASKPLANNER_AGENT_URL=http://taskplanner-agent:8019
+      - CONVERSATIONAL_AGENT_URL=http://conversational-agent:8018
+      - WORKSPACE_AGENT_URL=http://workspace-agent:8010
+      - CHATSTORE_AGENT_URL=http://chatstore-agent:8011
+      - SDSA_AGENT_URL=http://sdsa-agent:8012
+      - WEBSEARCH_AGENT_URL=http://websearch-agent:8013
+      - SPOTIFY_AGENT_URL=http://spotify-agent:8014
+      - VOICEIO_AGENT_URL=http://voiceio-agent:8015
+      - FILETRANSFORM_AGENT_URL=http://filetransform-agent:8016
+      - GENERALTASK_AGENT_URL=http://generaltask-agent:8017
+    depends_on:
+      - taskplanner-agent
+      - conversational-agent
+      - workspace-agent
+      - chatstore-agent
+      - sdsa-agent
+      - websearch-agent
+      - spotify-agent
+      - voiceio-agent
+      - filetransform-agent
+      - generaltask-agent
+
+  # ============== Frontend ==============
+  frontend:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.frontend
+    container_name: pai-frontend
+    ports:
+      - "3000:3000"
+    environment:
+      - ORCHESTRATOR_URL=http://orchestrator-agent:8020
+    depends_on:
+      - orchestrator-agent
+
+volumes:
+  mysql_data:
+  minio_data:
+  chromadb_data:
+  ollama_data:
+  model_cache:
+
+networks:
+  default:
+    name: pai-network

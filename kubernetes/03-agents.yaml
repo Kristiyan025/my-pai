@@ -1,0 +1,547 @@
+# Kubernetes deployments for backend agents
+# Apply after 02-services.yaml
+
+# ============== Workspace Agent ==============
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: workspace-agent
+  namespace: my-pai
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: workspace-agent
+  template:
+    metadata:
+      labels:
+        app: workspace-agent
+    spec:
+      containers:
+        - name: workspace-agent
+          image: my-pai/workspace-agent:latest
+          ports:
+            - containerPort: 8010
+          envFrom:
+            - configMapRef:
+                name: pai-config
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "50m"
+            limits:
+              memory: "256Mi"
+              cpu: "200m"
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: workspace-agent
+  namespace: my-pai
+spec:
+  selector:
+    app: workspace-agent
+  ports:
+    - port: 8010
+      targetPort: 8010
+
+---
+# ============== ChatStore Agent ==============
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: chatstore-agent
+  namespace: my-pai
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: chatstore-agent
+  template:
+    metadata:
+      labels:
+        app: chatstore-agent
+    spec:
+      containers:
+        - name: chatstore-agent
+          image: my-pai/chatstore-agent:latest
+          ports:
+            - containerPort: 8011
+          envFrom:
+            - configMapRef:
+                name: pai-config
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "50m"
+            limits:
+              memory: "256Mi"
+              cpu: "200m"
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: chatstore-agent
+  namespace: my-pai
+spec:
+  selector:
+    app: chatstore-agent
+  ports:
+    - port: 8011
+      targetPort: 8011
+
+---
+# ============== SDSA Agent (GPU) ==============
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sdsa-agent
+  namespace: my-pai
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: sdsa-agent
+  template:
+    metadata:
+      labels:
+        app: sdsa-agent
+    spec:
+      containers:
+        - name: sdsa-agent
+          image: my-pai/sdsa-agent:latest
+          ports:
+            - containerPort: 8012
+          envFrom:
+            - configMapRef:
+                name: pai-config
+          resources:
+            requests:
+              memory: "4Gi"
+              cpu: "500m"
+              nvidia.com/gpu: 1
+            limits:
+              memory: "8Gi"
+              cpu: "2000m"
+              nvidia.com/gpu: 1
+          volumeMounts:
+            - name: model-cache
+              mountPath: /root/.cache
+      volumes:
+        - name: model-cache
+          persistentVolumeClaim:
+            claimName: model-cache-pvc
+      tolerations:
+        - key: "nvidia.com/gpu"
+          operator: "Exists"
+          effect: "NoSchedule"
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sdsa-agent
+  namespace: my-pai
+spec:
+  selector:
+    app: sdsa-agent
+  ports:
+    - port: 8012
+      targetPort: 8012
+
+---
+# ============== WebSearch Agent ==============
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: websearch-agent
+  namespace: my-pai
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: websearch-agent
+  template:
+    metadata:
+      labels:
+        app: websearch-agent
+    spec:
+      containers:
+        - name: websearch-agent
+          image: my-pai/websearch-agent:latest
+          ports:
+            - containerPort: 8013
+          envFrom:
+            - configMapRef:
+                name: pai-config
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "50m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: websearch-agent
+  namespace: my-pai
+spec:
+  selector:
+    app: websearch-agent
+  ports:
+    - port: 8013
+      targetPort: 8013
+
+---
+# ============== Spotify Agent ==============
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: spotify-agent
+  namespace: my-pai
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: spotify-agent
+  template:
+    metadata:
+      labels:
+        app: spotify-agent
+    spec:
+      containers:
+        - name: spotify-agent
+          image: my-pai/spotify-agent:latest
+          ports:
+            - containerPort: 8014
+          envFrom:
+            - configMapRef:
+                name: pai-config
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "50m"
+            limits:
+              memory: "256Mi"
+              cpu: "200m"
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: spotify-agent
+  namespace: my-pai
+spec:
+  selector:
+    app: spotify-agent
+  ports:
+    - port: 8014
+      targetPort: 8014
+
+---
+# ============== VoiceIO Agent (GPU) ==============
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: voiceio-agent
+  namespace: my-pai
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: voiceio-agent
+  template:
+    metadata:
+      labels:
+        app: voiceio-agent
+    spec:
+      containers:
+        - name: voiceio-agent
+          image: my-pai/voiceio-agent:latest
+          ports:
+            - containerPort: 8015
+          envFrom:
+            - configMapRef:
+                name: pai-config
+          resources:
+            requests:
+              memory: "2Gi"
+              cpu: "500m"
+              nvidia.com/gpu: 1
+            limits:
+              memory: "4Gi"
+              cpu: "1000m"
+              nvidia.com/gpu: 1
+          volumeMounts:
+            - name: model-cache
+              mountPath: /root/.cache
+      volumes:
+        - name: model-cache
+          persistentVolumeClaim:
+            claimName: model-cache-pvc
+      tolerations:
+        - key: "nvidia.com/gpu"
+          operator: "Exists"
+          effect: "NoSchedule"
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: voiceio-agent
+  namespace: my-pai
+spec:
+  selector:
+    app: voiceio-agent
+  ports:
+    - port: 8015
+      targetPort: 8015
+
+---
+# ============== FileTransform Agent ==============
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: filetransform-agent
+  namespace: my-pai
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: filetransform-agent
+  template:
+    metadata:
+      labels:
+        app: filetransform-agent
+    spec:
+      containers:
+        - name: filetransform-agent
+          image: my-pai/filetransform-agent:latest
+          ports:
+            - containerPort: 8016
+          envFrom:
+            - configMapRef:
+                name: pai-config
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: filetransform-agent
+  namespace: my-pai
+spec:
+  selector:
+    app: filetransform-agent
+  ports:
+    - port: 8016
+      targetPort: 8016
+
+---
+# ============== GeneralTask Agent ==============
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: generaltask-agent
+  namespace: my-pai
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: generaltask-agent
+  template:
+    metadata:
+      labels:
+        app: generaltask-agent
+    spec:
+      containers:
+        - name: generaltask-agent
+          image: my-pai/generaltask-agent:latest
+          ports:
+            - containerPort: 8017
+          envFrom:
+            - configMapRef:
+                name: pai-config
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: generaltask-agent
+  namespace: my-pai
+spec:
+  selector:
+    app: generaltask-agent
+  ports:
+    - port: 8017
+      targetPort: 8017
+
+---
+# ============== Conversational Agent ==============
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: conversational-agent
+  namespace: my-pai
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: conversational-agent
+  template:
+    metadata:
+      labels:
+        app: conversational-agent
+    spec:
+      containers:
+        - name: conversational-agent
+          image: my-pai/conversational-agent:latest
+          ports:
+            - containerPort: 8018
+          envFrom:
+            - configMapRef:
+                name: pai-config
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: conversational-agent
+  namespace: my-pai
+spec:
+  selector:
+    app: conversational-agent
+  ports:
+    - port: 8018
+      targetPort: 8018
+
+---
+# ============== TaskPlanner Agent ==============
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: taskplanner-agent
+  namespace: my-pai
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: taskplanner-agent
+  template:
+    metadata:
+      labels:
+        app: taskplanner-agent
+    spec:
+      containers:
+        - name: taskplanner-agent
+          image: my-pai/taskplanner-agent:latest
+          ports:
+            - containerPort: 8019
+          envFrom:
+            - configMapRef:
+                name: pai-config
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: taskplanner-agent
+  namespace: my-pai
+spec:
+  selector:
+    app: taskplanner-agent
+  ports:
+    - port: 8019
+      targetPort: 8019
+
+---
+# ============== Orchestrator Agent ==============
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: orchestrator-agent
+  namespace: my-pai
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: orchestrator-agent
+  template:
+    metadata:
+      labels:
+        app: orchestrator-agent
+    spec:
+      containers:
+        - name: orchestrator-agent
+          image: my-pai/orchestrator-agent:latest
+          ports:
+            - containerPort: 8020
+          envFrom:
+            - configMapRef:
+                name: pai-config
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: orchestrator-agent
+  namespace: my-pai
+spec:
+  selector:
+    app: orchestrator-agent
+  ports:
+    - port: 8020
+      targetPort: 8020
+
+---
+# ============== Model Cache PVC ==============
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: model-cache-pvc
+  namespace: my-pai
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 30Gi

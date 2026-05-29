@@ -1,0 +1,126 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --foreground-rgb: 234, 234, 234;
+  --background-rgb: 26, 26, 46;
+}
+
+body {
+  color: rgb(var(--foreground-rgb));
+  background: rgb(var(--background-rgb));
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #16213e;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #0f3460;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #e94560;
+}
+
+/* Chat message styling */
+.chat-message {
+  @apply p-4 rounded-lg mb-4;
+}
+
+.chat-message.user {
+  @apply bg-pai-accent ml-8;
+}
+
+.chat-message.assistant {
+  @apply bg-pai-card mr-8;
+}
+
+/* Markdown styling in chat */
+.chat-message pre {
+  @apply bg-pai-bg p-4 rounded-lg overflow-x-auto my-2;
+}
+
+.chat-message code {
+  @apply bg-pai-bg px-1 py-0.5 rounded text-sm;
+}
+
+.chat-message pre code {
+  @apply bg-transparent p-0;
+}
+
+.chat-message ul,
+.chat-message ol {
+  @apply ml-6 my-2;
+}
+
+.chat-message li {
+  @apply my-1;
+}
+
+.chat-message h1,
+.chat-message h2,
+.chat-message h3 {
+  @apply font-bold my-2;
+}
+
+.chat-message h1 {
+  @apply text-xl;
+}
+
+.chat-message h2 {
+  @apply text-lg;
+}
+
+.chat-message p {
+  @apply my-2;
+}
+
+.chat-message table {
+  @apply border-collapse w-full my-2;
+}
+
+.chat-message th,
+.chat-message td {
+  @apply border border-pai-muted p-2 text-left;
+}
+
+.chat-message blockquote {
+  @apply border-l-4 border-pai-highlight pl-4 my-2 italic;
+}
+
+/* File browser styling */
+.file-item {
+  @apply flex items-center p-2 rounded-lg hover:bg-pai-accent cursor-pointer transition-colors;
+}
+
+.file-item.selected {
+  @apply bg-pai-accent;
+}
+
+/* Input styling */
+.pai-input {
+  @apply w-full bg-pai-card border border-pai-accent rounded-lg px-4 py-2 text-pai-text 
+         focus:outline-none focus:border-pai-highlight transition-colors;
+}
+
+/* Button styling */
+.pai-button {
+  @apply px-4 py-2 rounded-lg font-medium transition-colors;
+}
+
+.pai-button-primary {
+  @apply bg-pai-highlight text-white hover:bg-opacity-80;
+}
+
+.pai-button-secondary {
+  @apply bg-pai-accent text-pai-text hover:bg-opacity-80;
+}

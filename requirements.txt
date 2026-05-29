@@ -1,0 +1,546 @@
+Software Requirements Specification for (My PAI)
+Domain Description
+(My PAI) is a personal chatbot/workspace assistant system with a single (hardcoded) user. It integrates a chat interface, file workspace, and multiple “agents” (services) for tasks like web search, music playback, file conversion, voice I/O, etc. Key entities and relationships:
+User (id=1): the sole user of the system (always logged in).
+Chat: a conversation identified by (user_id, chat_id). One user can have many chats.
+Message: an immutable message in a chat, storing (chat_id, created_at, message_text, user_role). Each chat has an ordered sequence of messages. A message may reference workspace files via tags like <file path="/foo/bar.txt"/>.
+Workspace File: a file in the user’s workspace, uniquely identified by (user_id, filepath). Each file has a UUID stored in DocumentsService (MinIO). Files reside in directories, and directories may have nested subdirectories.
+Agent/Service: background components (WorkspaceAgent, ChatStoreAgent, SDSAgent, etc.) coordinate operations on behalf of the system. Each agent uses one or more backend services (e.g. databases or object stores) that are private to it.
+Document Chunk / Embedding: fragments of text or images produced by SDSAgent. These are stored with vector embeddings in a persistent vector database (Chroma).
+Glossary:
+SDSA: Semantic Document Store Agent, manages document “chunking” and embeddings via ML models.
+VectorDB (Chroma): a persistent vector database for storing embeddings and associated content.
+MinIO (DocumentsService): object store for raw file contents, keyed by UUID.
+FileSystemService: a relational DB (MySQL) storing file paths and metadata.
+ChatMessagesService: a relational DB (MySQL) storing chats and messages.
+PersistentVolumeClaim (PVC): Kubernetes storage claim for persistent data (DBs, file store)
+.
+Relationships (ER view): the User “owns” Chats and Files; each Chat “contains” many Messages; the User also “has” an optional Spotify API key. The FileSystemService tracks which filepath (string) maps to which content UUID in MinIO. A Subdirectory record relates one directory name under another (for listing). The SDSA embeds chunks of files/messages into VectorDB, but this is an internal data store (not directly queried by users).
+Functional Requirements
+Chat Management: The system shall allow managing chat sessions.
+The system shall list all chat sessions for the user.
+Acceptance: Given the single user, /api/chats (GET) returns all chat IDs and names for that user.
+The system shall allow creating a new chat.
+Acceptance: Given a request to create a chat (e.g. /api/chats (POST) with a name), the system creates a new chat record (user_id=1, new chat_id) and returns success.
+The system shall allow deleting an existing chat.
+Acceptance: Given a delete request (e.g. /api/chats/{chat_id} (DELETE)), the system removes the chat and all its messages.
+Chat Messaging: The system shall support exchanging messages within a chat.
+The system shall retrieve the last N messages in a chat.
+Acceptance: Given chat_id and N, /api/chats/{id}/messages?limit=N (GET) returns the most recent N messages in chronological order.
+The system shall allow adding a new message to a chat.
+Acceptance: Given chat_id and message text via /api/chats/{id}/messages (POST), the system adds a new message with user_role = "user" and timestamp = now. The system must record it as immutable (no further edits).
+The system shall allow the system (AI) to add a response message.
+Acceptance: After receiving a user message, the Orchestrator adds a new message (via the same agent API) with user_role = "system" containing the response.
+Conversational Interaction: The system shall process user inputs using an LLM-based agent.
+The system shall send each user message to the Task Planner Agent to generate an execution plan.
+Acceptance: Given a new user message (chat_id, message_id), the Task Planner Agent returns a valid JSON plan of steps (per its DSL).
+The system shall execute the plan via the Orchestrator Agent step by step.
+Acceptance: Each plan step invokes the specified agent or service synchronously. The final result is posted back as a system message in the chat.
+Workspace (File System) Operations: The system shall provide a “workspace” for the user’s files.
+The system shall list files and subdirectories in a given directory.
+Acceptance: Given user_id=1 and a directory path, the WorkspaceAgent shall return all files (and folders) in that directory via /api/workspace/list?dir=....
+The system shall allow uploading new files.
+Acceptance: Given a file upload (via UI or /api/workspace/upload), if the filepath does not exist, save the file to DocumentsService (MinIO), record it in FileSystemService, and confirm success. If the file exists, return an error.
+The system shall allow reading/downloading a file.
+Acceptance: Given user_id and a filepath, GET /api/workspace/file?path=... returns the file content from MinIO.
+The system shall allow copying files or directories.
+Acceptance: Given source files (or directories) and a destination directory, the system shall duplicate each file’s content (MinIO) with new UUID(s) and create new FileSystemService records for each copy. Recursive copy of directories is supported.
+The system shall allow moving files or directories.
+Acceptance: Given source file(s)/directory and destination, POST /api/workspace/move updates the FileSystemService records to reflect the new paths (no change in MinIO content). Moving a directory is recursive.
+The system shall allow deleting files or directories.
+Acceptance: Given file(s) or directory path, DELETE /api/workspace deletes the MinIO objects and removes FileSystemService records. Deleting a directory removes all its contents recursively.
+The system shall allow renaming a file or directory.
+Acceptance: Given a file or directory path and new name, POST /api/workspace/rename updates the FileSystemService records accordingly (keeping content/pointers unchanged).
+The system shall trigger re-indexing when files change.
+Acceptance: Whenever a file is uploaded, updated, moved, or deleted, the SDSAgent must be notified to update embeddings. For example, uploading a document with path /foo/bar.txt should cause SDSAgent to re-chunk and embed that document’s content under its ID. (No visible UI feedback is needed, but the embedding store reflects changes.)
+Web Search Agent (WSA): The system shall support web search queries.
+The system shall accept a search request (query, options) and return results.
+Acceptance: Given /api/search (POST) with JSON {query, max_results, ...}, the agent must return a JSON array of up to max_results [url, content] pairs (see schema below). The URLs must be absolute and normalized. Content must be UTF-8 text (HTML cleaned or non-HTML according to policy).
+The system shall deduplicate and filter URLs.
+Acceptance: Returned URLs should be unique (no duplicates after normalization), respect optional allow_domains/block_domains lists, and skip known spammy or blocked hosts.
+The system shall fetch and extract content per URL.
+Acceptance: For each URL, follow redirects (limit ~5), obey timeouts, then extract main text content if HTML (strip boilerplate) or return raw text/base64 for non-HTML (as per chosen policy). Errors or non-HTML binaries produce empty content string but URL is still returned in order.
+The system shall order results by relevance.
+Acceptance: The returned JSON array preserves the chosen URL ranking (most relevant first). Each result corresponds to one fetched URL.
+Music (Spotify) Agent (SMA): The system shall play songs via Spotify.
+The system shall allow storing a user’s Spotify API key.
+Acceptance: Given user_id and a key via /api/music/key (POST), store or update the key in the APY keys table.
+The system shall fetch and return song audio content.
+Acceptance: Given user_id and a songName via /api/music/fetch (GET), the agent checks for a stored API key. If absent, return error. Otherwise use the key (e.g. via Spotipy) to find and retrieve the song. The endpoint streams or returns the audio data (e.g. MP3 bytes) in the HTTP response.
+Voice I/O Agent (VIOA): The system shall convert between text and speech.
+The system shall transcribe audio to text.
+Acceptance: Given audio data (e.g. via /api/voice/recognize (POST)), call an Ollama/HuggingFace ASR model to return the transcribed text.
+The system shall synthesize speech from text.
+Acceptance: Given text (via /api/voice/synthesize (POST)), call an Ollama/HuggingFace TTS model to generate audio (e.g. WAV/MP3) and return it.
+The system shall read out chat messages.
+Acceptance: Given user_id, chat_id, message_id (e.g. /api/voice/speak?chat=...&msg=...), fetch that message’s text (from CSA) and return its speech audio.
+File Transform Agent (FTA): The system shall convert and manipulate files as specified.
+The system shall convert image formats to other image formats.
+Acceptance: Given an image file input and target format (e.g. PNG→JPG), the agent uses tools like ImageMagick to produce a converted file.
+The system shall convert documents and images to PDF.
+Acceptance: Given various inputs (PPTX, DOCX, images), produce a PDF. For multi-page inputs (e.g. slides, images list), all pages/images are combined in order.
+The system shall convert Office docs to images.
+Acceptance: Given PPTX or DOC/DOCX, export each page/slide to an image (PNG/JPG) via appropriate libraries.
+The system shall manipulate PDFs: merge, rotate pages, swap pages.
+Acceptance: Given the respective commands (merge list of PDFs, rotate page X by ±90°, swap two pages), the system uses tools like PyPDF2 to produce the modified PDF.
+General Task Agent (GTA): The system shall execute arbitrary code tasks.
+The system shall accept Python code and data, run it, and return output.
+Acceptance: Given /api/task/run (POST) with JSON {code, args}, the agent executes the code on the server (carefully sandboxed) and returns any result. (Use-cases include small data processing tasks not covered by other agents.)
+Conversational Agent (CA): The system shall generate free-form responses.
+The system shall accept a text prompt and persona and return an LLM-generated reply.
+Acceptance: Given /api/converse (POST) with {prompt, persona}, the agent invokes an LLM (Ollama/HuggingFace) and returns the generated text.
+Task Planner Agent (TPA): The system shall plan task execution.
+The system shall fetch the latest user message and produce an execution plan JSON.
+Acceptance: Given user_id, chat_id, message_id via /api/plan (POST), TPA retrieves that message (and possibly recent context), prompts an LLM with a structured-language schema, and returns a valid JSON plan (array of steps invoking agent actions or variable operations).
+Orchestrator Agent (OA): The system shall coordinate end-to-end execution.
+The system shall process a new user message through planning and execution.
+Acceptance: Given a user message (added to a chat), OA sends it to TPA for a plan, then sequentially executes each plan step (calling the appropriate agents internally). At the end, OA creates a new system message in the chat with the final output (e.g. text answer or file result).
+The system shall ensure synchronous calls to avoid concurrent GPU usage.
+Acceptance: All inter-service calls are synchronous HTTP; OA does not start a new LLM/ML call before the previous completes.
+Each of these functional requirements is met by specific backend endpoints and services, as detailed below.
+Non-Functional Requirements
+User Experience & Performance: The system shall provide a responsive UI and low-latency operations. Chat responses should appear in seconds for typical queries. Next.js server-side rendering (SSR) is used so that pages load quickly (SSR can deliver content 30–50% faster than client-side rendering
+). Search queries and API calls should aim for response times <10s (for up to 5 web pages).
+Scalability & Resource Use: Although only one user is supported, services should be modular. The system uses microservices in Kubernetes pods. Databases (MySQL, MinIO, Chroma) require PersistentVolumes so data survives restarts
+. GPU resources are limited (1× NVIDIA RTX 3070, 8GB), so ML models must be loaded on demand and released promptly. Pods requiring GPU shall declare the GPU in resources.limits (per K8 guidelines
+) and avoid loading multiple models at once.
+Reliability & Persistence: All data stores (MySQL, MinIO, Chroma) must use persistent volumes (PVCs) so data persists across pod restarts or rescheduling
+. Agents should be idempotent when possible (e.g. retry failed operations). Service health should be monitored.
+Maintainability & Modularity: The system shall be organized into clear services (agents) with well-defined APIs. Code should be structured so that new agents or features can be added without affecting existing ones. For example, text embedding and image caption utilities are separate classes used by SDSA.
+Security: Since this is a local personal deployment, user authentication is trivial (single user). However, the system must still be secure. Outbound service calls (e.g. in WSA) should validate URLs to prevent SSRF (e.g. disallow private IPs). Untrusted inputs (file paths, URLs, code for GTA) should be sanitized. All inter-service calls use HTTPS REST with no sensitive credentials in URLs. No secrets (like Spotify keys) should be logged.
+Privacy and Compliance: The system does not send user credentials or personal data to third parties without need. Web search results do not include any user-identifying info. If respecting robots.txt or rate limits is needed for the search agent, it should be done by policy (not in output).
+Logging and Observability: Key actions (search queries, URL fetch statuses, agent calls, errors) should be logged without PII. The WSA shall log each fetched URL and any fetch errors (excluding sensitive data) to aid debugging.
+Technology Constraints: The system shall run on a Windows laptop (WSL2) with a single GPU. All components (frontend, backend, databases) run in Kubernetes on this machine. Docker images must be compatible with this environment. Services should declare resource requests to fit in ~32GB RAM.
+Quality Attributes: The system shall be functional and correct (provide accurate chat responses and file operations). It shall be usable (simple chat interface and file manager UI). It shall be scalable enough for small dataset (vector DB may grow with documents, but the single-user scope keeps it moderate). ML inference quality depends on model selection (must use appropriate models for summarization, captioning, etc.).
+Technical Stack Requirements
+Frontend: The system shall use Next.js (React) with server-side rendering (Node.js). This provides fast initial page loads and SEO benefits
+. The UI pages include a chat interface and a workspace file manager.
+Backend: The system shall use Python FastAPI for REST services. Each agent (WorkspaceAgent, ChatStoreAgent, etc.) runs as a FastAPI service in its own pod. API endpoints are documented via OpenAPI (for clarity).
+Language Models: The system shall integrate with Ollama/HuggingFace models for NLP tasks: summarization, captioning, speech, etc. These models (e.g. “llava-1.5-7b” for captioning, Whisper for speech) run on the GPU. Model loading is dynamic to conserve GPU memory.
+Databases and Storage:
+Relational data uses MySQL 8 (InnoDB). Tables include chats, messages, files metadata, API keys (see DB schema).
+MinIO is used as a persistent document store for all file contents (videos/images/text) keyed by UUID.
+ChromaDB (with local disk persistence) is used as a vector database for embeddings. It stores numeric vectors and associated metadata/content.
+Agents & Utilities: Each agent has helper classes (e.g. TextEmbedder, ImageCaptioner, etc.) for ML tasks. Tools like Tesseract OCR, PyMuPDF/PyPDF2, ImageMagick, and Spotipy are required. These should be installed in the respective service images.
+API Communication: All inter-service communication is synchronous REST/HTTP+JSON. As microservices best practice notes, HTTP is a request/response (synchronous) protocol
+. Agents shall use HTTP calls (requests) to call other services (no asynchronous message queue). This ensures only one ML model is active per request path.
+Kubernetes: The system shall deploy each agent/service in its own Kubernetes pod. Each pod’s container image runs the required server and ML models. Backend services will run in a K8s cluster on WSL2 (e.g. using k3s or Docker Desktop).
+Resources:
+Each ML-intensive pod (SDSA, VIOA, CA, TPA) shall request nvidia.com/gpu: 1 in its limits
+ (so that K8s schedules on GPU node). These pods may also request several GB of RAM (e.g. 8 GiB) for model and data.
+Other pods (e.g. file server, chat server, API key service) require small CPU/memory (e.g. 0.5–1 CPU, 1–2 GiB RAM) and no GPU.
+The MinIO pod should have high storage (persistent volume ~10–100 GB) and moderate RAM (4 GiB).
+The ChromaDB vector store requires persistent disk (tens of GB as embedding count grows) and moderate RAM (4–8 GiB).
+Persistent Storage: All database services (MySQL, MinIO, Chroma) must use Kubernetes PersistentVolumeClaims so that their data persists independently of pod lifecycles
+.
+Database View (MySQL Schema)
+The following tables support the agents above. All tables use MySQL 8 (InnoDB). Each table’s primary key and indices are shown.
+USERS (optional): Contains system user(s). Purpose: Single user (id=1) for future extensibility.
+user_id INT NOT NULL (PK) – fixed to 1.
+CHATS: Stores chat sessions for each user.
+user_id INT NOT NULL (FK→USERS)
+chat_id INT NOT NULL (unique ID, possibly auto-increment per user)
+chat_name VARCHAR(255) NOT NULL (e.g. “Project Discussion”)
+Primary Key: (user_id, chat_id) – ensures each user’s chat IDs are unique.
+Index: (user_id) – to quickly find all chats for the user.
+CHAT_MESSAGES: Stores messages within chats (immutable).
+chat_id INT NOT NULL (FK→CHATS.chat_id)
+created_at DATETIME NOT NULL – timestamp of message (UTC).
+message_id INT NOT NULL – an integer sequence or ID (not PK here).
+message_text TEXT NOT NULL – the content of the message. Substrings <file path="..."/> may reference files.
+user_role ENUM('user','system') NOT NULL – who sent it.
+Primary Key: (chat_id, created_at) – clusters messages by chat and time.
+Index: (chat_id) – to retrieve all messages for a chat.
+Constraints: user_role limited to ‘user’ or ‘system’.
+FILES (workspace file records): Maps user file paths to content UUIDs in MinIO.
+user_id INT NOT NULL (FK→USERS).
+filepath VARCHAR(1024) NOT NULL – full path (e.g. /dir1/file.txt).
+uuid CHAR(36) NOT NULL – UUID of the file content in DocumentsService (MinIO).
+file_type VARCHAR(50) NOT NULL – file extension/type (e.g. “.txt”, “.png”).
+created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL.
+Primary Key: (user_id, filepath) – each user’s file paths unique.
+Unique: (user_id, uuid) – each content UUID is unique per user (if needed).
+Index: (user_id) – for quick directory listing by user.
+Check Constraint: Could enforce file_type matches filepath extension (optional).
+SUBDIRECTORIES: Maps a directory to its direct children subdirectories.
+user_id INT NOT NULL.
+directory VARCHAR(1024) NOT NULL – parent directory path (e.g. /dir1).
+subdirectory VARCHAR(255) NOT NULL – name of subfolder (e.g. subdirA).
+created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL.
+Primary Key: (user_id, directory, subdirectory).
+Index: (user_id, directory).
+API_KEYS: Stores API keys (e.g. Spotify) per user.
+user_id INT NOT NULL (PK, FK→USERS).
+spotify_api_key VARCHAR(255) NULL – may be null if not set.
+Entity-Relationship Diagram: The key relationships are: USER ||–o{ CHAT, CHAT ||–o{ CHAT_MESSAGES, USER ||–o{ FILES, USER ||–|| API_KEYS.
+Диаграма
+erDiagram
+    USER {
+      int user_id PK "Primary user"
+    }
+    CHAT {
+      int user_id FK "Owner user"
+      int chat_id PK "Chat ID"
+      varchar chat_name "Chat title"
+    }
+    MESSAGE {
+      int chat_id FK "Chat"
+      datetime created_at PK "Timestamp"
+      int message_id "Message seq"
+      text message_text "Content"
+      enum user_role "user/system"
+    }
+    FILE {
+      int user_id FK "Owner"
+      varchar filepath PK "Full path"
+      varchar uuid "Content UUID"
+      varchar file_type "File extension"
+      datetime created_at
+      datetime updated_at
+    }
+    API_KEYS {
+      int user_id PK "User ID"
+      varchar spotify_api_key "Spotify Key"
+    }
+    USER ||--o{ CHAT : "owns"
+    CHAT ||--o{ MESSAGE : "contains"
+    USER ||--o{ FILE : "has files"
+    USER ||--|| API_KEYS : "has"
+Use-Case Diagram
+The primary actor is the single User. The user can Chat with AI, Manage Workspace files, Search the Internet, Play Music, and Use Voice I/O via the chat interface and workspace UI. The use-case diagram below illustrates these interactions at a high level.
+Диаграма
+usecaseDiagram
+    actor "User" as U
+    system "My PAI System" {
+      usecase "Chat with AI (send/receive messages)" as UC1
+      usecase "Manage Workspace Files (upload, copy, etc.)" as UC2
+      usecase "Search the Web (via agent)" as UC3
+      usecase "Play Spotify Music" as UC4
+      usecase "Use Voice Input/Output" as UC5
+    }
+    U --> UC1
+    U --> UC2
+    U --> UC3
+    U --> UC4
+    U --> UC5
+Use Cases: The user opens the chat page to have a conversation with the AI. They may type a message (optionally referencing workspace files) and receive responses. The user can also navigate to the workspace page to upload, move, or view files (e.g. images, documents). They can instruct the system to search the web (e.g. “Find info on X”) or to play music (e.g. “Play song Y”), and can speak to the system by recording voice input or listen to AI responses via TTS.
+API Requirements
+The system exposes REST API endpoints (HTTP+JSON) for both the UI/frontend and inter-service calls. Below are the main endpoints and their contracts:
+Chat Management & Messaging:
+GET /api/chats – List all chats.
+Response: JSON array of {chat_id, chat_name}.
+POST /api/chats – Create a new chat.
+Request: JSON {chat_name}.
+Response: success or error.
+DELETE /api/chats/{chat_id} – Delete a chat and its messages.
+Response: success or error.
+GET /api/chats/{chat_id}/messages?limit=N – Get last N messages.
+Response: JSON array of messages [{created_at, message_text, user_role}, ...].
+POST /api/chats/{chat_id}/messages – Add a new user message.
+Request: JSON {message_text}.
+Response: success (and optionally the stored message).
+Workspace (File System):
+GET /api/workspace/list?dir=/some/path – List files and folders in a directory.
+Response: JSON {files: [file1, file2,...], folders: [subdir1, ...]}.
+POST /api/workspace/upload – Upload a new file.
+Request: multipart/form-data with file and target directory.
+Response: success or error if file exists.
+GET /api/workspace/file?path=/file/path – Download/read a file.
+Response: binary file content (appropriate MIME).
+POST /api/workspace/copy – Copy file(s) or directories.
+Request: JSON {src: [paths], dest: "/dest/dir"}.
+Response: success or errors.
+POST /api/workspace/move – Move file(s) or directories.
+Request: JSON {src: [paths], dest: "/dest/dir"}.
+Response: success or errors.
+DELETE /api/workspace – Delete file(s) or a directory.
+Request: JSON {targets: [paths]} (files or folder).
+Response: success.
+POST /api/workspace/rename – Rename a file or directory.
+Request: JSON {path: "/path/to/item", new_name: "newName"}.
+Response: success.
+Web Search Agent:
+POST /api/search – Perform a web search and fetch content.
+Request: JSON {query, max_results, language, region, allow_domains, block_domains, timeout_ms}.
+Response: JSON array of [url, content] pairs (as JSON strings). See Web Search Agent Output Schema below for format.
+Spotify Music Agent:
+POST /api/music/key – Set Spotify API key.
+Request: JSON {user_id, spotify_api_key}.
+Response: success.
+GET /api/music/fetch?song=Name – Fetch a song’s audio by name.
+Response: audio stream (e.g. audio/mpeg). Returns error if no API key.
+Voice I/O Agent:
+POST /api/voice/recognize – Transcribe speech to text.
+Request: raw audio file.
+Response: JSON {transcript: "..."}.
+POST /api/voice/synthesize – Synthesize speech from text.
+Request: JSON {text}.
+Response: audio stream (e.g. audio/wav).
+GET /api/voice/speak?chat={chat_id}&msg={message_id} – Speak a chat message.
+Response: audio stream of the specified message text.
+File Transform Agent:
+Endpoints like /api/transform/convert, /api/transform/merge_pdf, etc., each accepting file uploads and parameters (e.g. target format, page numbers) and returning a converted file. Specific contracts depend on the operation (use tools like ImageMagick and PyPDF2 internally).
+General Task Agent:
+POST /api/task/run – Execute custom Python code.
+Request: JSON {code: "...", args: {...}}.
+Response: JSON {result: ...} or error.
+Conversational Agent:
+POST /api/converse – Generate a response with an LLM.
+Request: JSON {prompt: "...", persona: {...}}.
+Response: JSON {reply: "..."}.
+Task Planner Agent:
+POST /api/plan – Create an execution plan from a message.
+Request: JSON {user_id, chat_id, message_id}.
+Response: JSON plan (an array of structured steps in the DSL).
+Orchestrator Agent:
+POST /api/orchestrate – Process a message end-to-end.
+Request: JSON {user_id, chat_id, message_text}.
+Response: JSON {system_reply: "..."} (the final answer).
+All internal service APIs use REST/JSON and do not require external authentication (single user).
+Web Search Agent Output Schema
+The Web Search Agent returns a JSON array of at most max_results elements. Each element is a 2-item array [url, content]. For example:
+[
+  ["https://example.com/article", "This is the extracted main text of the article..."],
+  ["https://example.org/page", "Another page's content..."]
+]
+URL: must be absolute and normalized (no tracking parameters).
+Content: UTF-8 text. For HTML pages, this is the cleaned article text. For other types (PDF/JSON/etc.), see policy (we choose to return base64 or empty).
+Formally, the JSON schema is:
+{
+  "type": "array",
+  "maxItems": 20,
+  "items": {
+    "type": "array",
+    "minItems": 2,
+    "maxItems": 2,
+    "items": [
+      {"type": "string", "format": "uri"},
+      {"type": "string"}
+    ]
+  }
+}
+(Ordered as in max_results limit. No extra keys allowed.)
+Web Search Agent Test Plan
+HTML Article: Query for a news article; output URLs and text (no menus/ads).
+Blog with Nav/Ads: Ensure only article content appears (no boilerplate).
+PDF Document: A PDF URL; agent returns the PDF content either raw or base64 (per chosen policy).
+JSON URL: A JSON API endpoint; should return raw JSON text (as string).
+404 Not Found: Return empty content for that URL, still in output list.
+Redirect: Query a short URL (bit.ly etc); follow redirect and return the final content.
+Consent Wall: A paywalled news page; skip or return empty content (depending on policy).
+Huge Page: A very large page (e.g. big HTML); enforce max byte limit and possibly truncate.
+Non-UTF8 Encoding: A page in Latin-1; decode properly to UTF-8.
+Duplicate Links: Query where search returns the same URL twice; ensure duplicates are removed.
+Kubernetes Requirements
+Service Architecture: Each agent and service runs in its own K8s Pod (Deployments). Services communicate only via synchronous REST calls. The Orchestrator initiates calls to agents in sequence (no parallel agent calls), to avoid concurrent GPU usage.
+Persistent Storage: Each stateful service (MySQL instances for FileSystemService, ChatMessagesService, APIKeyService; MinIO; Chroma) uses a PersistentVolumeClaim (PVC). As Kubernetes docs note, PV/PVCs decouple storage from pods, preserving data across pod restarts or deletions
+. For example, the MySQL pod for FileSystemService mounts a PVC for its data directory. MinIO and Chroma similarly use disk-backed volumes.
+Resource Allocation:
+GPU: Nodes must have the NVIDIA GPU plugin installed. Pods needing GPU (SDSAgent, VoiceAgent, ConversationalAgent, TaskPlannerAgent) should request nvidia.com/gpu: 1 in their spec.containers[].resources.limits
+. This ensures they are scheduled on the GPU node. Each such pod’s memory request can be high (e.g. 8 GiB) to load models. Only one ML-intensive pod should run at a time (enforced by Orchestrator logic).
+CPU/Memory: Non-ML pods (e.g. WorkspaceAgent, ChatStoreAgent, APIKeyService) can request ~0.5–1 CPU and 1–2 GiB RAM. The MinIO and Chroma pods should request more (e.g. 2–4 GiB RAM and large disk).
+Networking: All pods run in the same Kubernetes namespace. Services communicate over HTTP (ClusterIP Services). Public-facing endpoints (for UI) are exposed via an Ingress or API Gateway (since it’s local, even port-forward or K8s NodePort can work). No external ingress needed except possibly to allow the UI pages to connect to backend.
+GPU and Concurrency: As per Kubernetes scheduling, GPUs are defined as resources to request; a limit without request automatically sets the request
+. We ensure each ML pod has limits.gpu=1. Because there is only 1 GPU on the host, only one such pod can be scheduled at a time; others will be pending or we must set up NVIDIA MIG or time-slicing if true concurrency were desired (not needed here).
+Classes/Components View
+The system is organized into component classes corresponding to each agent and their backend services. Key classes/components include:
+WorkspaceAgent: handles file operations. Uses DocumentsService and FileSystemService.
+DocumentsService: (MinIO-backed) stores raw file contents (binary) addressed by UUID.
+FileSystemService: (MySQL) maintains tables of file paths and directories for each user.
+ChatStoreAgent: manages chat data. Uses ChatMessagesService.
+ChatMessagesService: (MySQL) stores chats and messages as defined above.
+SDSAgent: Semantic Document Store Agent. Uses VectorDBService for embeddings. Internally uses classes like TextEmbedder, ImageEmbedder, TextChunker, etc.
+VectorDBService: (Chroma) stores vector embeddings and associated text/image chunk metadata.
+WebSearchAgent: performs web queries and fetches content. Standalone (uses no internal services, except HTTP clients).
+SpotifyAgent: handles music. Uses APIKeyService to retrieve the user’s API key.
+APIKeyService: (MySQL) stores OAuth keys (e.g. Spotify key) per user.
+VoiceIOAgent: handles speech recognition and synthesis (uses ML models on GPU).
+FileTransformAgent: handles format conversions (ImageMagick, PyPDF2, etc.).
+GeneralTaskAgent: executes user-supplied Python code safely.
+ConversationalAgent: calls an LLM for free-form replies.
+TaskPlannerAgent: calls an LLM to generate an execution plan (interprets DSL, uses Python code to validate plan syntax).
+OrchestratorAgent: drives the overall process (receives a new user message, stores it via ChatStoreAgent, calls TaskPlannerAgent, then executes each step by invoking other agents, and finally stores the AI’s reply via ChatStoreAgent).
+Диаграма
+classDiagram
+    class WorkspaceAgent {
+      +readFile(userId, filepath)
+      +copyFiles(srcPaths, destDir)
+      +moveFiles(srcPaths, destDir)
+      +deleteFiles(paths)
+      +rename(path, newName)
+      +listFiles(dir)
+      +listSubdirs(dir)
+    }
+    class DocumentsService {
+      +getDocument(uuid)
+      +putDocument(fileContent)
+      +copyDocument(srcUUID, newUUID)
+      +deleteDocument(uuid)
+    }
+    class FileSystemService {
+      +getFileRecord(userId, filepath)
+      +addFileRecord(userId, filepath, uuid)
+      +updateFileRecord(userId, filepath, newUuid)
+      +deleteFileRecord(userId, filepath)
+      +listFiles(userId, directory)
+      +listSubdirs(userId, directory)
+    }
+    WorkspaceAgent --> DocumentsService : uses
+    WorkspaceAgent --> FileSystemService : uses
+
+    class ChatStoreAgent {
+      +getChats(userId)
+      +getMessages(userId, chatId, limit)
+      +createChat(userId, name)
+      +deleteChat(userId, chatId)
+      +addMessage(userId, chatId, text, role)
+    }
+    class ChatMessagesService {
+      +fetchChats(userId)
+      +fetchMessages(chatId, limit)
+      +insertChat(userId, chatId, name)
+      +deleteChat(userId, chatId)
+      +insertMessage(chatId, createdAt, text, role)
+    }
+    ChatStoreAgent --> ChatMessagesService : uses
+
+    class SDSAgent {
+      +addDocument(userId, docName, content)
+      +addChatMessages(userId, chatId, messageIds)
+      +querySimilar(embedding, k)
+    }
+    class VectorDBService {
+      +addEmbedding(chunkId, vector, metadata)
+      +removeEmbedding(chunkId)
+      +query(vector, k)
+    }
+    SDSAgent --> VectorDBService : uses
+
+    class SpotifyAgent {
+      +setApiKey(userId, key)
+      +fetchSong(userId, songName)
+    }
+    class APIKeyService {
+      +getKey(userId)
+      +setKey(userId, key)
+    }
+    SpotifyAgent --> APIKeyService : uses
+
+    class WebSearchAgent {
+      +search(query, maxResults)
+    }
+    class VoiceIOAgent {
+      +transcribe(audio)
+      +synthesize(text)
+    }
+    class FileTransformAgent {
+      +convertImage(input, format)
+      +convertToPDF(inputs)
+      +mergePDFs(inputs)
+      +rotatePDF(inputs, pages, direction)
+      +swapPDFPages(inputs, page1, page2)
+    }
+    class GeneralTaskAgent {
+      +executeCode(args, code)
+    }
+    class ConversationalAgent {
+      +generateResponse(prompt, persona)
+    }
+    class TaskPlannerAgent {
+      +planExecution(userId, chatId, messageId)
+    }
+    class OrchestratorAgent {
+      +orchestrate(userId, chatId, messageText)
+    }
+    class UI {
+      +displayChat()
+      +displayWorkspace()
+      +sendMessage(text)
+      +uploadFile(file)
+    }
+    OrchestratorAgent --> WebSearchAgent : calls
+    OrchestratorAgent --> SpotifyAgent : calls
+    OrchestratorAgent --> VoiceIOAgent : calls
+    OrchestratorAgent --> FileTransformAgent : calls
+    OrchestratorAgent --> GeneralTaskAgent : calls
+    OrchestratorAgent --> ConversationalAgent : calls
+    OrchestratorAgent --> TaskPlannerAgent : calls
+    UI --> WebSearchAgent : requests
+    UI --> SpotifyAgent : requests
+    UI --> VoiceIOAgent : requests
+    UI --> FileTransformAgent : requests
+    UI --> GeneralTaskAgent : requests
+    UI --> ConversationalAgent : requests
+    UI --> OrchestratorAgent : send
+    UI --> WorkspaceAgent : browse
+Project Structure View
+The project codebase is organized by frontend vs backend, and by functional areas. A suggested directory layout is:
+frontend/ – Next.js application
+pages/ – React pages (chat interface, workspace interface)
+components/ – UI components (chat bubbles, file icons)
+api/ – Optional Next.js API routes for server-side functions
+public/ – Static assets (icons for file types, etc.)
+backend/ – Python/ FastAPI services
+workspace_agent/ – WorkspaceAgent service code
+chatstore_agent/ – ChatStoreAgent service code
+sdsa_agent/ – Semantic Document Store Agent code (plus chunkers/embedders submodules)
+websearch_agent/ – WebSearchAgent code
+spotify_agent/ – SpotifyAgent code
+voiceio_agent/ – VoiceIOAgent code
+filetransform_agent/ – FileTransformAgent code
+generaltask_agent/ – GeneralTaskAgent code
+conversational_agent/ – ConversationalAgent code
+taskplanner_agent/ – TaskPlannerAgent code
+orchestrator_agent/ – OrchestratorAgent code
+api_keys_service/ – APIKeyService service code
+docs_service/ – DocumentsService (MinIO) setup/config
+filesystem_service/ – FileSystemService (MySQL) models and migrations
+chatmessages_service/ – ChatMessagesService (MySQL) models and migrations
+vectordb_service/ – VectorDBService (Chroma) setup/config
+shared/ – Shared code (models, utils, types, config)
+k8s/ – Kubernetes manifests (Deployments, Services, PVCs) for each component
+docker/ – Dockerfiles for each service
+scripts/ – Utility scripts (e.g. DB initialization, local test runs)
+Диаграма
+mindmap
+  Curricula (My PAI)
+    Frontend (NextJS App)
+      pages/
+      components/
+      public/
+    Backend
+      workspace_agent/
+      chatstore_agent/
+      sdsa_agent/
+      websearch_agent/
+      spotify_agent/
+      voiceio_agent/
+      filetransform_agent/
+      generaltask_agent/
+      conversational_agent/
+      taskplanner_agent/
+      orchestrator_agent/
+      api_keys_service/
+      filesystem_service/
+      chatmessages_service/
+      vectordb_service/
+      shared/
+    Infrastructure
+      k8s/
+      docker/
+      scripts/
+Directories for each agent/service correspond to the class/component view above. The UI code in frontend/ closely matches the React/Next structure. The Kubernetes manifests under k8s/ define Deployments (with resource requests/limits), Services, and PVCs for MySQL/Chroma/MinIO.
+Acceptance Criteria Highlights
+Chats: Create, list, and delete chats via API; retrieve messages.
+Workspace: Uploading a file stores it in MinIO and SQL; copying/moving updates DB and storage correctly.
+Search: Given a query, /api/search returns a valid JSON array of [url, content] pairs (no markdown)
+. The content for HTML pages contains only the main readable text; non-HTML contents follow the defined policy.
+Agents: Each agent endpoint returns correctly (e.g. Spotify returns audio stream if key is set; voice synth returns audio; file transform returns converted file).
+Resources: All DB services use persistent storage
+. GPU is requested in limits for ML pods
+.
+All requirements and criteria are specified with the expectation of thorough automated testing (unit tests for each function, integration tests for API endpoints, and manual tests per the Web Search test plan). Sources: Relevant technical guidance has been followed, such as Kubernetes stateful application examples
+ and GPU scheduling requirements
+, as well as best practices for microservice communication (HTTP/REST)
+ and Next.js SSR performance
+.

@@ -1,0 +1,49 @@
+name: my_pai
+channels:
+  - conda-forge
+  - nvidia
+dependencies:
+  - python==3.10
+  - cudatoolkit==11.2
+  - cudnn==8.1.0.77
+
+  - tensorboard
+
+  - tesseract
+  - pytesseract>=0.3.10
+
+  - poppler>=0.68
+  - pdf2image
+
+  - sentence-transformers>=2.2.2
+  - faiss-cpu==1.7.4
+
+  - chromadb==0.5.0
+  - posthog >= 2.4.0
+
+  - numpy<2
+  - pandas==2.2.2
+  - scipy
+  - matplotlib
+  - opencv
+  - pillow
+
+  - nbformat
+  - tqdm
+
+  - ipython
+  - jupyterlab
+  - ipykernel
+  - ipywidgets
+
+  - python-dotenv
+
+  - pip:
+      - ollama>=0.5.0
+
+# Activate the environment
+# micromamba activate my_pai
+
+# micromamba env create -n my_pai -f config.yaml
+# micromamba env update -n my_pai -f config.yaml
+# python -m ipykernel install --name=my_pai --display-name "Python (my_pai)"

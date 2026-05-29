@@ -1,0 +1,130 @@
+# Python Agents Base Image with GPU Support
+FROM nvidia/cuda:12.1.0-runtime-ubuntu22.04 AS base
+
+WORKDIR /app
+
+# Prevent interactive prompts during apt install
+ENV DEBIAN_FRONTEND=noninteractive
+ENV TZ=UTC
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    software-properties-common \
+    && add-apt-repository -y ppa:deadsnakes/ppa \
+    && apt-get update && apt-get install -y --no-install-recommends \
+    python3.11 \
+    python3.11-venv \
+    python3-pip \
+    gcc \
+    g++ \
+    libffi-dev \
+    pkg-config \
+    libavformat-dev \
+    libavcodec-dev \
+    libavdevice-dev \
+    libavutil-dev \
+    libswscale-dev \
+    libswresample-dev \
+    tesseract-ocr \
+    libtesseract-dev \
+    ffmpeg \
+    libsndfile1 \
+    espeak-ng \
+    libespeak-ng1 \
+    speech-dispatcher \
+    poppler-utils \
+    pandoc \
+    git \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set Python 3.11 as default
+RUN update-alternatives --install /usr/bin/python python /usr/bin/python3.11 1 \
+    && update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1
+
+# Install pip for Python 3.11
+RUN curl -sS https://bootstrap.pypa.io/get-pip.py | python3.11
+
+# Install Python dependencies
+COPY backend/requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy shared code
+COPY backend/shared /app/shared
+
+# ============== Workspace Agent ==============
+FROM base AS workspace-agent
+COPY backend/agents/workspace_agent /app/agents/workspace_agent
+WORKDIR /app/agents/workspace_agent
+EXPOSE 8010
+CMD ["python", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8010"]
+
+# ============== ChatStore Agent ==============
+FROM base AS chatstore-agent
+COPY backend/agents/chatstore_agent /app/agents/chatstore_agent
+WORKDIR /app/agents/chatstore_agent
+EXPOSE 8011
+CMD ["python", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8011"]
+
+# ============== SDSA Agent (GPU) ==============
+FROM base AS sdsa-agent
+COPY backend/agents/sdsa_agent /app/agents/sdsa_agent
+WORKDIR /app/agents/sdsa_agent
+EXPOSE 8012
+CMD ["python", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8012"]
+
+# ============== WebSearch Agent ==============
+FROM base AS websearch-agent
+COPY backend/agents/websearch_agent /app/agents/websearch_agent
+WORKDIR /app/agents/websearch_agent
+EXPOSE 8013
+CMD ["python", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8013"]
+
+# ============== Spotify Agent ==============
+FROM base AS spotify-agent
+COPY backend/agents/spotify_agent /app/agents/spotify_agent
+WORKDIR /app/agents/spotify_agent
+EXPOSE 8014
+CMD ["python", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8014"]
+
+# ============== VoiceIO Agent (GPU) ==============
+FROM base AS voiceio-agent
+COPY backend/agents/voiceio_agent /app/agents/voiceio_agent
+WORKDIR /app/agents/voiceio_agent
+EXPOSE 8015
+CMD ["python", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8015"]
+
+# ============== FileTransform Agent ==============
+FROM base AS filetransform-agent
+COPY backend/agents/filetransform_agent /app/agents/filetransform_agent
+WORKDIR /app/agents/filetransform_agent
+EXPOSE 8016
+CMD ["python", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8016"]
+
+# ============== GeneralTask Agent ==============
+FROM base AS generaltask-agent
+COPY backend/agents/generaltask_agent /app/agents/generaltask_agent
+WORKDIR /app/agents/generaltask_agent
+EXPOSE 8017
+CMD ["python", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8017"]
+
+# ============== Conversational Agent ==============
+FROM base AS conversational-agent
+COPY backend/agents/conversational_agent /app/agents/conversational_agent
+WORKDIR /app/agents/conversational_agent
+EXPOSE 8018
+CMD ["python", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8018"]
+
+# ============== TaskPlanner Agent ==============
+FROM base AS taskplanner-agent
+COPY backend/agents/taskplanner_agent /app/agents/taskplanner_agent
+WORKDIR /app/agents/taskplanner_agent
+EXPOSE 8019
+CMD ["python", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8019"]
+
+# ============== Orchestrator Agent ==============
+FROM base AS orchestrator-agent
+COPY backend/agents/orchestrator_agent /app/agents/orchestrator_agent
+WORKDIR /app/agents/orchestrator_agent
+EXPOSE 8020
+CMD ["python", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8020"]
